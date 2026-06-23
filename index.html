@@ -187,7 +187,10 @@ function makeParticle(type, x, y, fixed) {
     r: d.r, charge: d.charge, thermal: d.thermal,
     fixed: !!fixed, homeX: x, homeY: y,
     alpha:  0.28 + Math.random() * 0.72,
-    dAlpha: (Math.random() < 0.5 ? 1 : -1) * (0.003 + Math.random() * 0.004),
+    // electrons drift depth slowly (they're the only moving layer in metal modes)
+    dAlpha: (Math.random() < 0.5 ? 1 : -1) * (type === 'electron'
+      ? 0.0008 + Math.random() * 0.0012
+      : 0.003  + Math.random() * 0.004),
     orbitals: makeOrbitals(type),
   };
 }
@@ -195,7 +198,18 @@ function makeParticle(type, x, y, fixed) {
 function respawn(p) {
   const pos = spawnPos();
   p.x = pos.x; p.y = pos.y; p.vx = 0; p.vy = 0;
-  // Ghost in from the back — start at min opacity, always fading up
+
+  if (p.type === 'electron') {
+    // Electrons drift left → respawn on the right to keep density uniform.
+    // Bias x into the right 40% of the inter-electrode space.
+    const margin = 18;
+    const xMin = ELEC_DEPTH + margin, xMax = W - ELEC_DEPTH - margin;
+    p.x = xMax - Math.random() * (xMax - xMin) * 0.40;
+    // Keep current drifting alpha — no ghost-in snap for electrons
+    return;
+  }
+
+  // Solution particles ghost in from the back
   p.alpha  = ALPHA_MIN + Math.random() * 0.06;
   p.dAlpha = Math.abs(p.dAlpha);
 }
