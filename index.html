@@ -187,6 +187,7 @@ function makeParticle(type, x, y, fixed) {
     r: d.r, charge: d.charge, thermal: d.thermal,
     fixed: !!fixed, homeX: x, homeY: y,
     alpha:  0.28 + Math.random() * 0.72,
+    scale:  1.0,
     // electrons drift depth slowly (they're the only moving layer in metal modes)
     dAlpha: (Math.random() < 0.5 ? 1 : -1) * (type === 'electron'
       ? 0.0008 + Math.random() * 0.0012
@@ -214,27 +215,41 @@ function respawn(p) {
   p.dAlpha = Math.abs(p.dAlpha);
 }
 
-// Three depth layers for lattice atoms: front opaque, mid, back dim
-const LATTICE_LAYER_ALPHA = [1.0, 0.50, 0.18];
-
 function generateLattice(type, count) {
-  const xMin = ELEC_DEPTH + 12, xMax = W - ELEC_DEPTH - 12;
-  const yMin = metalTop() + 12,  yMax = metalBot() - 12;
-  const dx = xMax - xMin, dy = yMax - yMin;
-  const cols = Math.max(2, Math.round(Math.sqrt(count * dx / dy)));
-  const rows = Math.max(2, Math.round(count / cols));
-  const cSp = dx / (cols + 1), rSp = dy / (rows + 1);
+  const xMin = ELEC_DEPTH + 14, xMax = W - ELEC_DEPTH - 14;
+  const yMin = metalTop() + 14,  yMax = metalBot() - 14;
+  const w = xMax - xMin, h = yMax - yMin;
+
+  // FCC-style depth layers:
+  //   front & back share the same grid; middle is offset by half a cell in x and y
+  //   (the face-center layer that sits in the holes between front/back atoms)
+  const layerDefs = [
+    { alpha: 1.00, scale: 1.00, ox: 0.0, oy: 0.0 },  // front  — full size, opaque
+    { alpha: 0.50, scale: 0.82, ox: 0.5, oy: 0.5 },  // middle — half-cell stagger
+    { alpha: 0.17, scale: 0.65, ox: 0.0, oy: 0.0 },  // back   — small & dim
+  ];
+
+  const perLayer = Math.round(count / 3);
+  const cols = Math.max(3, Math.round(Math.sqrt(perLayer * w / h)));
+  const rows = Math.max(2, Math.round(perLayer / cols));
+  const cSp = w / (cols + 1);
+  const rSp = h / (rows + 1);
+
   const ps = [];
-  for (let r = 0; r < rows && ps.length < count; r++)
-    for (let c = 0; c < cols && ps.length < count; c++) {
-      const x = xMin + (c + 1) * cSp + (Math.random() - 0.5) * cSp * 0.2;
-      const y = yMin + (r + 1) * rSp + (Math.random() - 0.5) * rSp * 0.2;
-      const p = makeParticle(type, x, y, true);
-      // Assign row to depth layer: rows cycle front→mid→back, giving crystal plane depth
-      p.alpha  = LATTICE_LAYER_ALPHA[r % 3];
-      p.dAlpha = 0;  // lattice atoms hold their depth — no drift
-      ps.push(p);
+  for (const def of layerDefs) {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = xMin + (c + 1 + def.ox) * cSp + (Math.random() - 0.5) * cSp * 0.06;
+        const y = yMin + (r + 1 + def.oy) * rSp + (Math.random() - 0.5) * rSp * 0.06;
+        if (x < xMin || x > xMax || y < yMin || y > yMax) continue;
+        const p = makeParticle(type, x, y, true);
+        p.alpha  = def.alpha;
+        p.scale  = def.scale;
+        p.dAlpha = 0;
+        ps.push(p);
+      }
     }
+  }
   return ps;
 }
 
@@ -411,11 +426,12 @@ function drawParticles() {
     if (type === 'electron') continue;
     const grp = byType[type];
     if (!grp) continue;
-    const img  = getImg(type);
-    const half = img.width / 2;
+    const img      = getImg(type);
+    const baseHalf = img.width / 2;
     for (const p of grp) {
       ctx.globalAlpha = p.alpha;
-      ctx.drawImage(img, p.x - half, p.y - half);
+      const half = baseHalf * (p.scale ?? 1);
+      ctx.drawImage(img, p.x - half, p.y - half, half * 2, half * 2);
     }
   }
   ctx.globalAlpha = 1;
@@ -423,15 +439,15 @@ function drawParticles() {
   // Draw all electrons (free + orbital) as flat solid arc() — crisp, no blur
   ctx.fillStyle = '#ffee00';
 
-  // Free electrons — full opacity
+  // Free electrons — each with its own drifting alpha
   const freeElec = byType['electron'];
   if (freeElec) {
-    ctx.beginPath();
     for (const p of freeElec) {
-      ctx.moveTo(p.x + ER, p.y);
+      ctx.globalAlpha = p.alpha;
+      ctx.beginPath();
       ctx.arc(p.x, p.y, ER, 0, Math.PI * 2);
+      ctx.fill();
     }
-    ctx.fill();
   }
 
   // Orbital electrons — two depth passes: back (dim) then front (bright)
