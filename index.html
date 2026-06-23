@@ -344,6 +344,13 @@ function step() {
     }
 
     // Depth alpha drift — all non-fixed particles (fixed atoms use static layer alpha)
+    if (p.type === 'electron') {
+      // Stochastic rate: jitter dAlpha each frame so speed wanders like thermal motion
+      p.dAlpha += (Math.random() - 0.5) * 0.0030;
+      const mag = Math.abs(p.dAlpha);
+      if (mag < 0.0015) p.dAlpha = p.dAlpha < 0 ? -0.0015 : 0.0015;  // don't stall
+      if (mag > 0.0120) p.dAlpha = p.dAlpha < 0 ? -0.0120 : 0.0120;  // don't race
+    }
     p.alpha += p.dAlpha;
     if (p.alpha >= ALPHA_MAX) { p.alpha = ALPHA_MAX; p.dAlpha = -Math.abs(p.dAlpha); }
     if (p.alpha <= ALPHA_MIN) { p.alpha = ALPHA_MIN; p.dAlpha =  Math.abs(p.dAlpha); }
@@ -450,42 +457,33 @@ function drawParticles() {
     }
   }
 
-  // Orbital electrons — two depth passes: back (dim) then front (bright)
-  // Back pass: nz <= 0 at 30% opacity
-  ctx.globalAlpha = 0.30;
-  ctx.beginPath();
+  // Orbital electrons — per-ion two-pass (back dim, front full) × parent alpha
+  ctx.fillStyle = '#ffee00';
   for (const type of DRAW_ORDER) {
     if (type === 'electron') continue;
     const grp = byType[type]; if (!grp) continue;
     for (const p of grp) {
+      if (!p.orbitals.length) continue;
+      // Back hemisphere: parent alpha × 0.30
+      ctx.globalAlpha = p.alpha * 0.30;
+      ctx.beginPath();
       for (const orb of p.orbitals) {
         if (orb.nz > 0) continue;
-        const ox = p.x + orb.nx * orb.r;
-        const oy = p.y + orb.ny * orb.r;
-        ctx.moveTo(ox + ER, oy);
-        ctx.arc(ox, oy, ER, 0, Math.PI * 2);
+        const ox = p.x + orb.nx * orb.r, oy = p.y + orb.ny * orb.r;
+        ctx.moveTo(ox + ER, oy); ctx.arc(ox, oy, ER, 0, Math.PI * 2);
       }
-    }
-  }
-  ctx.fill();
-
-  // Front pass: nz > 0 at full opacity
-  ctx.globalAlpha = 1.0;
-  ctx.beginPath();
-  for (const type of DRAW_ORDER) {
-    if (type === 'electron') continue;
-    const grp = byType[type]; if (!grp) continue;
-    for (const p of grp) {
+      ctx.fill();
+      // Front hemisphere: parent alpha × 1.0
+      ctx.globalAlpha = p.alpha;
+      ctx.beginPath();
       for (const orb of p.orbitals) {
         if (orb.nz <= 0) continue;
-        const ox = p.x + orb.nx * orb.r;
-        const oy = p.y + orb.ny * orb.r;
-        ctx.moveTo(ox + ER, oy);
-        ctx.arc(ox, oy, ER, 0, Math.PI * 2);
+        const ox = p.x + orb.nx * orb.r, oy = p.y + orb.ny * orb.r;
+        ctx.moveTo(ox + ER, oy); ctx.arc(ox, oy, ER, 0, Math.PI * 2);
       }
+      ctx.fill();
     }
   }
-  ctx.fill();
 }
 
 // ─── Draw electrodes (solid color, flush with walls, protruding inward) ───────
