@@ -266,9 +266,9 @@ function initMode(mode) {
   particles   = [];
   switch (mode) {
     case 'copper':
-      particles.push(...generateLattice('cu', 110), ...generateRandom('electron', 120)); break;
+      particles.push(...generateLattice('cu', 110), ...generateRandom('electron', 240)); break;
     case 'tin':
-      particles.push(...generateLattice('sn_metal', 110), ...generateRandom('electron', 120)); break;
+      particles.push(...generateLattice('sn_metal', 110), ...generateRandom('electron', 240)); break;
     case 'nacl':
       particles.push(...generateRandom('water', 80),
                      ...generateRandom('na_plus', 45), ...generateRandom('cl_minus', 45)); break;
