@@ -160,11 +160,22 @@ function makeOrbitals(type) {
   const n = PTYPES[type].orbs;
   if (!n) return [];
   const r = ORB_R[type] || 14;
-  return Array.from({ length: n }, (_, i) => ({
-    angle:  (Math.PI * 2 / n) * i + Math.random() * 1.2,
-    angVel: (0.28 + Math.random() * 0.14) * (Math.random() < 0.5 ? 1 : -1),
-    r,
-  }));
+  return Array.from({ length: n }, () => {
+    // Random point on unit sphere
+    const phi   = Math.acos(2 * Math.random() - 1);
+    const theta = Math.random() * Math.PI * 2;
+    const nx = Math.sin(phi) * Math.cos(theta);
+    const ny = Math.sin(phi) * Math.sin(theta);
+    const nz = Math.cos(phi);
+    // Random tangential velocity direction
+    let tx = Math.random() - 0.5, ty = Math.random() - 0.5, tz = Math.random() - 0.5;
+    const d = tx*nx + ty*ny + tz*nz;
+    tx -= d*nx; ty -= d*ny; tz -= d*nz;
+    let tLen = Math.sqrt(tx*tx + ty*ty + tz*tz) || 1;
+    const speed = 0.30 + Math.random() * 0.15;
+    tx = tx/tLen * speed; ty = ty/tLen * speed; tz = tz/tLen * speed;
+    return { nx, ny, nz, tx, ty, tz, speed, r };
+  });
 }
 
 function makeParticle(type, x, y, fixed) {
@@ -238,8 +249,29 @@ function step() {
   const efac   = currentMode === 'water' ? WATER_EFAC : 1.0;
 
   for (const p of particles) {
-    // Update orbital electrons
-    for (const orb of p.orbitals) orb.angle += orb.angVel;
+    // Update orbital electrons — random walk on sphere surface
+    for (const orb of p.orbitals) {
+      // Lateral turn axis = n × t (perpendicular to both position and velocity)
+      const cx = orb.ny*orb.tz - orb.nz*orb.ty;
+      const cy = orb.nz*orb.tx - orb.nx*orb.tz;
+      const cz = orb.nx*orb.ty - orb.ny*orb.tx;
+      // Random lateral kick rotates velocity left/right on sphere surface
+      const turn = (Math.random() - 0.5) * 0.22;
+      orb.tx += cx * turn; orb.ty += cy * turn; orb.tz += cz * turn;
+      // Normalize velocity and restore speed
+      let tLen = Math.sqrt(orb.tx*orb.tx + orb.ty*orb.ty + orb.tz*orb.tz) || 1;
+      orb.tx = orb.tx/tLen * orb.speed;
+      orb.ty = orb.ty/tLen * orb.speed;
+      orb.tz = orb.tz/tLen * orb.speed;
+      // Move position along sphere
+      orb.nx += orb.tx; orb.ny += orb.ty; orb.nz += orb.tz;
+      // Renormalize to unit sphere
+      let nLen = Math.sqrt(orb.nx*orb.nx + orb.ny*orb.ny + orb.nz*orb.nz) || 1;
+      orb.nx /= nLen; orb.ny /= nLen; orb.nz /= nLen;
+      // Re-orthogonalize velocity to sphere surface
+      const dot = orb.tx*orb.nx + orb.ty*orb.ny + orb.tz*orb.nz;
+      orb.tx -= dot*orb.nx; orb.ty -= dot*orb.ny; orb.tz -= dot*orb.nz;
+    }
 
     if (p.fixed) {
       p.vx += (p.homeX - p.x) * RESTORE_K + (Math.random() - 0.5) * p.thermal;
@@ -357,35 +389,54 @@ function drawParticles() {
   ctx.globalAlpha = 1;
 
   // Draw all electrons (free + orbital) as flat solid arc() — crisp, no blur
-  // All at full opacity; at 2px the alpha depth effect is imperceptible
   ctx.fillStyle = '#ffee00';
-  ctx.beginPath();
 
-  // Free electrons
+  // Free electrons — full opacity
   const freeElec = byType['electron'];
   if (freeElec) {
+    ctx.beginPath();
     for (const p of freeElec) {
       ctx.moveTo(p.x + ER, p.y);
       ctx.arc(p.x, p.y, ER, 0, Math.PI * 2);
     }
+    ctx.fill();
   }
 
-  // Orbital electrons on ions
+  // Orbital electrons — two depth passes: back (dim) then front (bright)
+  // Back pass: nz <= 0 at 30% opacity
+  ctx.globalAlpha = 0.30;
+  ctx.beginPath();
   for (const type of DRAW_ORDER) {
     if (type === 'electron') continue;
-    const grp = byType[type];
-    if (!grp) continue;
+    const grp = byType[type]; if (!grp) continue;
     for (const p of grp) {
-      if (!p.orbitals.length) continue;
       for (const orb of p.orbitals) {
-        const ox = p.x + Math.cos(orb.angle) * orb.r;
-        const oy = p.y + Math.sin(orb.angle) * orb.r;
+        if (orb.nz > 0) continue;
+        const ox = p.x + orb.nx * orb.r;
+        const oy = p.y + orb.ny * orb.r;
         ctx.moveTo(ox + ER, oy);
         ctx.arc(ox, oy, ER, 0, Math.PI * 2);
       }
     }
   }
+  ctx.fill();
 
+  // Front pass: nz > 0 at full opacity
+  ctx.globalAlpha = 1.0;
+  ctx.beginPath();
+  for (const type of DRAW_ORDER) {
+    if (type === 'electron') continue;
+    const grp = byType[type]; if (!grp) continue;
+    for (const p of grp) {
+      for (const orb of p.orbitals) {
+        if (orb.nz <= 0) continue;
+        const ox = p.x + orb.nx * orb.r;
+        const oy = p.y + orb.ny * orb.r;
+        ctx.moveTo(ox + ER, oy);
+        ctx.arc(ox, oy, ER, 0, Math.PI * 2);
+      }
+    }
+  }
   ctx.fill();
 }
 
