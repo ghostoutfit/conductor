@@ -200,6 +200,9 @@ function respawn(p) {
   p.dAlpha = Math.abs(p.dAlpha);
 }
 
+// Three depth layers for lattice atoms: front opaque, mid, back dim
+const LATTICE_LAYER_ALPHA = [1.0, 0.50, 0.18];
+
 function generateLattice(type, count) {
   const xMin = ELEC_DEPTH + 12, xMax = W - ELEC_DEPTH - 12;
   const yMin = metalTop() + 12,  yMax = metalBot() - 12;
@@ -212,7 +215,11 @@ function generateLattice(type, count) {
     for (let c = 0; c < cols && ps.length < count; c++) {
       const x = xMin + (c + 1) * cSp + (Math.random() - 0.5) * cSp * 0.2;
       const y = yMin + (r + 1) * rSp + (Math.random() - 0.5) * rSp * 0.2;
-      ps.push(makeParticle(type, x, y, true));
+      const p = makeParticle(type, x, y, true);
+      // Assign row to depth layer: rows cycle front→mid→back, giving crystal plane depth
+      p.alpha  = LATTICE_LAYER_ALPHA[r % 3];
+      p.dAlpha = 0;  // lattice atoms hold their depth — no drift
+      ps.push(p);
     }
   return ps;
 }
@@ -307,12 +314,10 @@ function step() {
       else { p.x = xRight - p.r; p.vx = -Math.abs(p.vx); }
     }
 
-    // Depth alpha drift — solution modes only
-    if (!isMetal()) {
-      p.alpha += p.dAlpha;
-      if (p.alpha >= ALPHA_MAX) { p.alpha = ALPHA_MAX; p.dAlpha = -Math.abs(p.dAlpha); }
-      if (p.alpha <= ALPHA_MIN) { p.alpha = ALPHA_MIN; p.dAlpha =  Math.abs(p.dAlpha); }
-    }
+    // Depth alpha drift — all non-fixed particles (fixed atoms use static layer alpha)
+    p.alpha += p.dAlpha;
+    if (p.alpha >= ALPHA_MAX) { p.alpha = ALPHA_MAX; p.dAlpha = -Math.abs(p.dAlpha); }
+    if (p.alpha <= ALPHA_MIN) { p.alpha = ALPHA_MIN; p.dAlpha =  Math.abs(p.dAlpha); }
   }
 }
 
