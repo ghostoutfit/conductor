@@ -123,6 +123,8 @@ const T_LATTICE   = 0.042;
 const DAMP        = 0.91;
 const RESTORE_K   = 0.08;
 const WATER_EFAC  = 0.028;
+const ALPHA_MIN   = 0.07;
+const ALPHA_MAX   = 1.0;
 
 // ─── Particle type definitions ────────────────────────────────────────────────
 // electrons are YELLOW; orbs = valence electron count on the ion
@@ -184,7 +186,8 @@ function makeParticle(type, x, y, fixed) {
     type, x, y, vx: 0, vy: 0,
     r: d.r, charge: d.charge, thermal: d.thermal,
     fixed: !!fixed, homeX: x, homeY: y,
-    alpha: 0.28 + Math.random() * 0.72,
+    alpha:  0.28 + Math.random() * 0.72,
+    dAlpha: (Math.random() < 0.5 ? 1 : -1) * (0.003 + Math.random() * 0.004),
     orbitals: makeOrbitals(type),
   };
 }
@@ -192,6 +195,9 @@ function makeParticle(type, x, y, fixed) {
 function respawn(p) {
   const pos = spawnPos();
   p.x = pos.x; p.y = pos.y; p.vx = 0; p.vy = 0;
+  // Ghost in from the back — start at min opacity, always fading up
+  p.alpha  = ALPHA_MIN + Math.random() * 0.06;
+  p.dAlpha = Math.abs(p.dAlpha);
 }
 
 function generateLattice(type, count) {
@@ -299,6 +305,13 @@ function step() {
     if (p.x + p.r > xRight) {
       if (p.charge > 0) respawn(p);
       else { p.x = xRight - p.r; p.vx = -Math.abs(p.vx); }
+    }
+
+    // Depth alpha drift — solution modes only
+    if (!isMetal()) {
+      p.alpha += p.dAlpha;
+      if (p.alpha >= ALPHA_MAX) { p.alpha = ALPHA_MAX; p.dAlpha = -Math.abs(p.dAlpha); }
+      if (p.alpha <= ALPHA_MIN) { p.alpha = ALPHA_MIN; p.dAlpha =  Math.abs(p.dAlpha); }
     }
   }
 }
