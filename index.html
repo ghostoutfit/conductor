@@ -423,6 +423,8 @@ function getImg(type) {
 const DRAW_ORDER = ['water','cu','sn_metal','oh_minus','h_plus','na_plus','cl_minus','sn_plus','electron'];
 
 const ER = PTYPES.electron.r;  // electron draw radius (2px)
+const N_EBUCKETS = 8;
+const _eBuckets  = Array.from({length: N_EBUCKETS}, () => []);
 
 function drawParticles() {
   const byType = {};
@@ -446,13 +448,23 @@ function drawParticles() {
   // Draw all electrons (free + orbital) as flat solid arc() — crisp, no blur
   ctx.fillStyle = '#ffee00';
 
-  // Free electrons — each with its own drifting alpha
+  // Free electrons — bucketed by alpha (8 buckets → 8 fills instead of 240)
   const freeElec = byType['electron'];
   if (freeElec) {
+    for (let i = 0; i < N_EBUCKETS; i++) _eBuckets[i].length = 0;
     for (const p of freeElec) {
-      ctx.globalAlpha = p.alpha;
+      const bi = Math.min(N_EBUCKETS - 1,
+        Math.floor((p.alpha - ALPHA_MIN) / (ALPHA_MAX - ALPHA_MIN) * N_EBUCKETS));
+      _eBuckets[bi].push(p);
+    }
+    for (let i = 0; i < N_EBUCKETS; i++) {
+      if (!_eBuckets[i].length) continue;
+      ctx.globalAlpha = ALPHA_MIN + (i + 0.5) / N_EBUCKETS * (ALPHA_MAX - ALPHA_MIN);
       ctx.beginPath();
-      ctx.arc(p.x, p.y, ER, 0, Math.PI * 2);
+      for (const p of _eBuckets[i]) {
+        ctx.moveTo(p.x + ER, p.y);
+        ctx.arc(p.x, p.y, ER, 0, Math.PI * 2);
+      }
       ctx.fill();
     }
   }
