@@ -125,21 +125,21 @@ const RESTORE_K   = 0.08;
 const WATER_EFAC  = 0.028;
 
 // ─── Particle type definitions ────────────────────────────────────────────────
-// electrons are now YELLOW
+// electrons are YELLOW; orbs = valence electron count on the ion
 const PTYPES = {
-  electron: { r: 4,  charge: -1, hex: '#ffee00', label: '',      thermal: T_ELECTRON, orbs: 0 },
+  electron: { r: 2,  charge: -1, hex: '#ffee00', label: '',      thermal: T_ELECTRON, orbs: 0 },
   cu:       { r: 13, charge:  0, hex: '#c8682a', label: 'Cu',    thermal: T_LATTICE,  orbs: 0 },
   sn_metal: { r: 13, charge:  0, hex: '#8899bb', label: 'Sn',    thermal: T_LATTICE,  orbs: 0 },
-  na_plus:  { r: 9,  charge: +1, hex: '#ffaa30', label: 'Na⁺',  thermal: T_ION,      orbs: 1 },
-  cl_minus: { r: 9,  charge: -1, hex: '#88dd33', label: 'Cl⁻',  thermal: T_ION,      orbs: 1 },
-  sn_plus:  { r: 10, charge: +2, hex: '#22ccaa', label: 'Sn²⁺', thermal: T_ION,      orbs: 2 },
+  na_plus:  { r: 9,  charge: +1, hex: '#ffaa30', label: 'Na⁺',  thermal: T_ION,      orbs: 8 },  // [Ne] outer shell
+  cl_minus: { r: 9,  charge: -1, hex: '#88dd33', label: 'Cl⁻',  thermal: T_ION,      orbs: 8 },  // [Ar] outer shell
+  sn_plus:  { r: 10, charge: +2, hex: '#22ccaa', label: 'Sn²⁺', thermal: T_ION,      orbs: 2 },  // 5s² remaining
   water:    { r: 8,  charge:  0, hex: null,       label: 'H₂O',  thermal: T_WATER,    orbs: 0 },
   h_plus:   { r: 5,  charge: +1, hex: '#ff8844', label: 'H⁺',   thermal: T_ION,      orbs: 0 },
-  oh_minus: { r: 5,  charge: -1, hex: '#9966ff', label: 'OH⁻',  thermal: T_ION,      orbs: 1 },
+  oh_minus: { r: 5,  charge: -1, hex: '#9966ff', label: 'OH⁻',  thermal: T_ION,      orbs: 6 },  // O valence electrons
 };
 
 // Orbital radius (electron orbit distance from ion center)
-const ORB_R = { na_plus: 16, cl_minus: 16, sn_plus: 18, oh_minus: 12 };
+const ORB_R = { na_plus: 18, cl_minus: 18, sn_plus: 16, oh_minus: 13 };
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let particles   = [];
@@ -162,7 +162,7 @@ function makeOrbitals(type) {
   const r = ORB_R[type] || 14;
   return Array.from({ length: n }, (_, i) => ({
     angle:  (Math.PI * 2 / n) * i + Math.random() * 1.2,
-    angVel: (0.09 + Math.random() * 0.05) * (Math.random() < 0.5 ? 1 : -1),
+    angVel: (0.28 + Math.random() * 0.14) * (Math.random() < 0.5 ? 1 : -1),
     r,
   }));
 }
@@ -306,6 +306,9 @@ function getImg(type) {
     g.addColorStop(1,   'rgba(80,140,205,0.10)');
     ot.fillStyle = g;
     ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
+  } else if (type === 'electron') {
+    // Flat solid — no gradient, no blur; drawn via arc() in drawParticles instead
+    // (cache not used for electrons)
   } else {
     const hex = d.hex;
     // Core sphere — highlight + body + shadow, no outer glow
@@ -317,7 +320,7 @@ function getImg(type) {
     ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
 
     // Label for larger particles
-    if (r >= 8 && type !== 'electron' && d.label) {
+    if (r >= 8 && d.label) {
       const fs = Math.max(7, Math.min(10, r * 0.78));
       ot.font = `600 ${fs}px Lexend, sans-serif`;
       ot.textAlign = 'center'; ot.textBaseline = 'middle';
@@ -333,31 +336,57 @@ function getImg(type) {
 // ─── Draw order ───────────────────────────────────────────────────────────────
 const DRAW_ORDER = ['water','cu','sn_metal','oh_minus','h_plus','na_plus','cl_minus','sn_plus','electron'];
 
+const ER = PTYPES.electron.r;  // electron draw radius (2px)
+
 function drawParticles() {
-  const eImg  = getImg('electron');
-  const eHalf = eImg.width / 2;
   const byType = {};
   for (const p of particles) (byType[p.type] || (byType[p.type] = [])).push(p);
 
+  // Draw non-electron particle types via offscreen image cache
   for (const type of DRAW_ORDER) {
+    if (type === 'electron') continue;
     const grp = byType[type];
     if (!grp) continue;
     const img  = getImg(type);
     const half = img.width / 2;
-
     for (const p of grp) {
       ctx.globalAlpha = p.alpha;
       ctx.drawImage(img, p.x - half, p.y - half);
-
-      // Orbital electrons
-      for (const orb of p.orbitals) {
-        const ox = p.x + Math.cos(orb.angle) * orb.r;
-        const oy = p.y + Math.sin(orb.angle) * orb.r;
-        ctx.drawImage(eImg, ox - eHalf, oy - eHalf);
-      }
     }
   }
   ctx.globalAlpha = 1;
+
+  // Draw all electrons (free + orbital) as flat solid arc() — crisp, no blur
+  // All at full opacity; at 2px the alpha depth effect is imperceptible
+  ctx.fillStyle = '#ffee00';
+  ctx.beginPath();
+
+  // Free electrons
+  const freeElec = byType['electron'];
+  if (freeElec) {
+    for (const p of freeElec) {
+      ctx.moveTo(p.x + ER, p.y);
+      ctx.arc(p.x, p.y, ER, 0, Math.PI * 2);
+    }
+  }
+
+  // Orbital electrons on ions
+  for (const type of DRAW_ORDER) {
+    if (type === 'electron') continue;
+    const grp = byType[type];
+    if (!grp) continue;
+    for (const p of grp) {
+      if (!p.orbitals.length) continue;
+      for (const orb of p.orbitals) {
+        const ox = p.x + Math.cos(orb.angle) * orb.r;
+        const oy = p.y + Math.sin(orb.angle) * orb.r;
+        ctx.moveTo(ox + ER, oy);
+        ctx.arc(ox, oy, ER, 0, Math.PI * 2);
+      }
+    }
+  }
+
+  ctx.fill();
 }
 
 // ─── Draw electrodes (solid color, flush with walls, protruding inward) ───────
