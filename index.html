@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conductor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --ui-bg:     rgba(8, 6, 24, 0.78);
+  --ui-border: rgba(255,255,255,0.07);
+  --text-dim:  rgba(220,215,255,0.50);
+  --text-bright: rgba(240,235,255,0.92);
+}
+
+body {
+  background: #05040f;
+  font-family: 'Lexend', sans-serif;
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+}
+
+#canvas {
+  position: fixed;
+  top: 0; left: 0;
+  display: block;
+}
+
+#toolbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 24px;
+  background: var(--ui-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--ui-border);
+  box-shadow: 0 2px 24px rgba(0,0,0,0.55);
+}
+
+.mode-btn {
+  font-family: 'Lexend', sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 6px 17px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, box-shadow 0.15s;
+  user-select: none;
+  white-space: nowrap;
+  line-height: 1;
+}
+.mode-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text-bright);
+  border-color: rgba(255,255,255,0.18);
+}
+
+.mode-btn.active[data-mode="copper"] {
+  border-color: #d4782a; color: #e8a060;
+  background: rgba(212,120,42,0.13);
+  box-shadow: 0 0 8px rgba(212,120,42,0.35), 0 0 22px rgba(212,120,42,0.12);
+  text-shadow: 0 0 10px rgba(212,120,42,0.65);
+}
+.mode-btn.active[data-mode="tin"] {
+  border-color: #8899bb; color: #aabbd8;
+  background: rgba(136,153,187,0.13);
+  box-shadow: 0 0 8px rgba(136,153,187,0.35), 0 0 22px rgba(136,153,187,0.12);
+  text-shadow: 0 0 10px rgba(136,153,187,0.65);
+}
+.mode-btn.active[data-mode="nacl"] {
+  border-color: #ffaa30; color: #ffc870;
+  background: rgba(255,170,48,0.13);
+  box-shadow: 0 0 8px rgba(255,170,48,0.35), 0 0 22px rgba(255,170,48,0.12);
+  text-shadow: 0 0 10px rgba(255,170,48,0.65);
+}
+.mode-btn.active[data-mode="sncl2"] {
+  border-color: #22ccaa; color: #55dfc0;
+  background: rgba(34,204,170,0.13);
+  box-shadow: 0 0 8px rgba(34,204,170,0.35), 0 0 22px rgba(34,204,170,0.12);
+  text-shadow: 0 0 10px rgba(34,204,170,0.65);
+}
+.mode-btn.active[data-mode="water"] {
+  border-color: #5ab0e0; color: #80ccf0;
+  background: rgba(90,176,224,0.13);
+  box-shadow: 0 0 8px rgba(90,176,224,0.35), 0 0 22px rgba(90,176,224,0.12);
+  text-shadow: 0 0 10px rgba(90,176,224,0.65);
+}
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="toolbar">
+  <button class="mode-btn active" data-mode="copper">Copper</button>
+  <button class="mode-btn"        data-mode="tin">Tin</button>
+  <button class="mode-btn"        data-mode="nacl">NaCl (aq)</button>
+  <button class="mode-btn"        data-mode="sncl2">SnCl₂ (aq)</button>
+  <button class="mode-btn"        data-mode="water">Pure H₂O</button>
+</div>
+
+<script>
+// ─── Canvas & resize ──────────────────────────────────────────────────────────
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const toolbar = document.getElementById('toolbar');
+let W, H, toolH;
+
+function resize() {
+  W     = canvas.width  = window.innerWidth;
+  H     = canvas.height = window.innerHeight;
+  toolH = toolbar.offsetHeight;
+}
+
+// ─── Electrode geometry ───────────────────────────────────────────────────────
+const ELEC_W = 44;
+const anodeL   = () => Math.round(W * 0.06);
+const anodeR   = () => anodeL() + ELEC_W;
+const cathodeL = () => Math.round(W * 0.94) - ELEC_W;
+const cathodeR = () => cathodeL() + ELEC_W;
+const elecTop  = () => toolH + (H - toolH) * 0.25;
+const elecBot  = () => toolH + (H - toolH) * 0.75;
+
+// ─── Physics constants ────────────────────────────────────────────────────────
+const E_STR      = 0.013;   // E-field drift strength per unit charge per frame
+const T_ELECTRON = 0.34;    // thermal jitter amplitude — electrons
+const T_ION      = 0.26;    // thermal jitter amplitude — ions
+const T_WATER    = 0.09;    // thermal jitter amplitude — water molecules
+const T_LATTICE  = 0.042;   // thermal jitter amplitude — fixed lattice atoms
+const DAMP       = 0.91;    // velocity damping per frame
+const RESTORE_K  = 0.08;    // lattice spring constant
+const WATER_EFAC = 0.03;    // E-field scale factor for pure water (autoionization only)
+
+// ─── Particle type definitions ────────────────────────────────────────────────
+const PTYPES = {
+  electron: { r: 4,  charge: -1, hex: '#00eeff', label: 'e⁻',   thermal: T_ELECTRON },
+  cu:       { r: 13, charge:  0, hex: '#d4782a', label: 'Cu',   thermal: T_LATTICE  },
+  sn_metal: { r: 13, charge:  0, hex: '#8899bb', label: 'Sn',   thermal: T_LATTICE  },
+  na_plus:  { r: 9,  charge: +1, hex: '#ffaa30', label: 'Na⁺', thermal: T_ION      },
+  cl_minus: { r: 9,  charge: -1, hex: '#88dd33', label: 'Cl⁻', thermal: T_ION      },
+  sn_plus:  { r: 10, charge: +2, hex: '#22ccaa', label: 'Sn²⁺',thermal: T_ION      },
+  water:    { r: 8,  charge:  0, hex: null,       label: 'H₂O', thermal: T_WATER    },
+  h_plus:   { r: 5,  charge: +1, hex: '#ff4488', label: 'H⁺',  thermal: T_ION      },
+  oh_minus: { r: 5,  charge: -1, hex: '#9966ff', label: 'OH⁻', thermal: T_ION      },
+};
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let particles   = [];
+let currentMode = 'copper';
+
+// ─── Particle helpers ─────────────────────────────────────────────────────────
+function spawnPos() {
+  const m = 35;
+  const aR = anodeR(), cL = cathodeL();
+  return {
+    x: aR + m + Math.random() * (cL - aR - 2 * m),
+    y: toolH + 8 + Math.random() * (H - toolH - 16),
+  };
+}
+
+function makeParticle(type, x, y, fixed) {
+  const d = PTYPES[type];
+  return { type, x, y, vx: 0, vy: 0,
+           r: d.r, charge: d.charge, thermal: d.thermal,
+           fixed: !!fixed, homeX: x, homeY: y };
+}
+
+function respawn(p) {
+  const pos = spawnPos();
+  p.x = pos.x; p.y = pos.y;
+  p.vx = 0; p.vy = 0;
+}
+
+function generateLattice(type, count) {
+  const xMin = anodeR() + 16, xMax = cathodeL() - 16;
+  const yMin = toolH + 16,    yMax = H - 16;
+  const dx = xMax - xMin, dy = yMax - yMin;
+  const cols = Math.max(2, Math.round(Math.sqrt(count * dx / dy)));
+  const rows = Math.max(2, Math.round(count / cols));
+  const cSp = dx / (cols + 1), rSp = dy / (rows + 1);
+  const ps = [];
+  for (let r = 0; r < rows && ps.length < count; r++) {
+    for (let c = 0; c < cols && ps.length < count; c++) {
+      const x = xMin + (c + 1) * cSp + (Math.random() - 0.5) * cSp * 0.2;
+      const y = yMin + (r + 1) * rSp + (Math.random() - 0.5) * rSp * 0.2;
+      ps.push(makeParticle(type, x, y, true));
+    }
+  }
+  return ps;
+}
+
+function generateRandom(type, count) {
+  return Array.from({ length: count }, () => {
+    const pos = spawnPos();
+    return makeParticle(type, pos.x, pos.y, false);
+  });
+}
+
+// ─── Mode init ────────────────────────────────────────────────────────────────
+function initMode(mode) {
+  currentMode = mode;
+  particles   = [];
+  switch (mode) {
+    case 'copper':
+      particles.push(...generateLattice('cu', 55),       ...generateRandom('electron', 35)); break;
+    case 'tin':
+      particles.push(...generateLattice('sn_metal', 55), ...generateRandom('electron', 35)); break;
+    case 'nacl':
+      particles.push(...generateRandom('water', 55),
+                     ...generateRandom('na_plus', 20),   ...generateRandom('cl_minus', 20)); break;
+    case 'sncl2':
+      particles.push(...generateRandom('water', 55),
+                     ...generateRandom('sn_plus', 15),   ...generateRandom('cl_minus', 30)); break;
+    case 'water':
+      particles.push(...generateRandom('water', 90),
+                     ...generateRandom('h_plus', 4),     ...generateRandom('oh_minus', 4)); break;
+  }
+}
+
+// ─── Physics ──────────────────────────────────────────────────────────────────
+function step() {
+  const aR     = anodeR();
+  const cL     = cathodeL();
+  const eScale = currentMode === 'water' ? WATER_EFAC : 1.0;
+
+  for (const p of particles) {
+    if (p.fixed) {
+      p.vx += (p.homeX - p.x) * RESTORE_K + (Math.random() - 0.5) * p.thermal;
+      p.vy += (p.homeY - p.y) * RESTORE_K + (Math.random() - 0.5) * p.thermal;
+      p.vx *= DAMP; p.vy *= DAMP;
+      p.x  += p.vx; p.y  += p.vy;
+      continue;
+    }
+
+    p.vx += p.charge * E_STR * eScale + (Math.random() - 0.5) * p.thermal;
+    p.vy += (Math.random() - 0.5) * p.thermal;
+    p.vx *= DAMP; p.vy *= DAMP;
+    p.x  += p.vx; p.y  += p.vy;
+
+    // Top / bottom walls
+    if (p.y - p.r < toolH) { p.y = toolH + p.r; p.vy =  Math.abs(p.vy); }
+    if (p.y + p.r > H)     { p.y = H - p.r;     p.vy = -Math.abs(p.vy); }
+
+    // Left wall — anode inner face
+    if (p.x - p.r < aR) {
+      if (p.charge < 0) respawn(p);
+      else { p.x = aR + p.r; p.vx = Math.abs(p.vx); }
+    }
+    // Right wall — cathode inner face
+    if (p.x + p.r > cL) {
+      if (p.charge > 0) respawn(p);
+      else { p.x = cL - p.r; p.vx = -Math.abs(p.vx); }
+    }
+  }
+}
+
+// ─── Color helpers ────────────────────────────────────────────────────────────
+function hexRgb(hex) {
+  return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+}
+function lerpHex(h1, h2, t) {
+  const [r1,g1,b1] = hexRgb(h1), [r2,g2,b2] = hexRgb(h2);
+  return `rgb(${Math.round(r1+(r2-r1)*t)},${Math.round(g1+(g2-g1)*t)},${Math.round(b1+(b2-b1)*t)})`;
+}
+function lighten(hex, f) {
+  const [r,g,b] = hexRgb(hex);
+  return `rgb(${Math.min(255,Math.round(r+255*f))},${Math.min(255,Math.round(g+255*f))},${Math.min(255,Math.round(b+255*f))})`;
+}
+function darken(hex, f) {
+  const [r,g,b] = hexRgb(hex);
+  return `rgb(${Math.max(0,Math.round(r-255*f))},${Math.max(0,Math.round(g-255*f))},${Math.max(0,Math.round(b-255*f))})`;
+}
+
+// ─── Particle image cache ─────────────────────────────────────────────────────
+const _imgCache = {};
+
+function getImg(type) {
+  if (_imgCache[type]) return _imgCache[type];
+  const d    = PTYPES[type];
+  const r    = d.r;
+  const glow = type === 'electron' ? 14 : (r >= 9 ? 9 : 7);
+  const size = (r + glow) * 2;
+  const oc   = document.createElement('canvas');
+  oc.width   = oc.height = size;
+  const ot   = oc.getContext('2d');
+  const cx   = size / 2, cy = size / 2;
+
+  if (type === 'water') {
+    // Semi-transparent pale blue orb
+    const g = ot.createRadialGradient(cx, cy, 0, cx, cy, r + 5);
+    g.addColorStop(0,    'rgba(155,210,245,0.54)');
+    g.addColorStop(0.55, 'rgba(110,175,225,0.36)');
+    g.addColorStop(1,    'rgba(75,140,200,0)');
+    ot.fillStyle = g;
+    ot.beginPath(); ot.arc(cx, cy, r + 5, 0, Math.PI * 2); ot.fill();
+  } else {
+    const hex = d.hex;
+    // Outer glow ring
+    const gGlow = ot.createRadialGradient(cx, cy, r * 0.6, cx, cy, r + glow);
+    gGlow.addColorStop(0, hex + 'cc');
+    gGlow.addColorStop(1, hex + '00');
+    ot.fillStyle = gGlow;
+    ot.beginPath(); ot.arc(cx, cy, r + glow, 0, Math.PI * 2); ot.fill();
+
+    // Core sphere with off-center highlight
+    const gCore = ot.createRadialGradient(cx - r * 0.28, cy - r * 0.28, 0, cx, cy, r);
+    gCore.addColorStop(0,    lighten(hex, 0.55));
+    gCore.addColorStop(0.45, hex);
+    gCore.addColorStop(1,    darken(hex, 0.45));
+    ot.fillStyle = gCore;
+    ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
+
+    // Label (skip for tiny particles r < 8, and for electrons)
+    if (r >= 8 && type !== 'electron') {
+      const fs = Math.max(7, Math.min(10, r * 0.78));
+      ot.font = `600 ${fs}px Lexend, sans-serif`;
+      ot.textAlign = 'center';
+      ot.textBaseline = 'middle';
+      ot.fillStyle = 'rgba(255,255,255,0.90)';
+      ot.shadowColor = 'rgba(0,0,0,0.55)';
+      ot.shadowBlur = 2;
+      ot.fillText(d.label, cx, cy);
+    }
+  }
+
+  _imgCache[type] = oc;
+  return oc;
+}
+
+// ─── Draw electrode ───────────────────────────────────────────────────────────
+function drawElectrode(x, y, w, h, isAnode) {
+  const col = isAnode ? '#ff6030' : '#2288ff';
+  const mid = x + w / 2;
+
+  ctx.save();
+
+  // Metallic body
+  const gBody = ctx.createLinearGradient(x, 0, x + w, 0);
+  if (isAnode) {
+    gBody.addColorStop(0,   '#1e0e05');
+    gBody.addColorStop(0.3, '#6b3412');
+    gBody.addColorStop(0.5, '#9a4c1a');
+    gBody.addColorStop(0.7, '#6b3412');
+    gBody.addColorStop(1,   '#1e0e05');
+  } else {
+    gBody.addColorStop(0,   '#04091c');
+    gBody.addColorStop(0.3, '#112b5c');
+    gBody.addColorStop(0.5, '#1a3f84');
+    gBody.addColorStop(0.7, '#112b5c');
+    gBody.addColorStop(1,   '#04091c');
+  }
+  ctx.fillStyle = gBody;
+  ctx.fillRect(x, y, w, h);
+
+  // Inner-face glow — anode glows right, cathode glows left
+  const innerX = isAnode ? x + w : x;
+  const gGlow  = ctx.createLinearGradient(innerX, 0, innerX + (isAnode ? -w * 0.9 : w * 0.9), 0);
+  gGlow.addColorStop(0, isAnode ? 'rgba(255,96,48,0.50)' : 'rgba(34,136,255,0.50)');
+  gGlow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gGlow;
+  ctx.fillRect(x, y, w, h);
+
+  // Border with glow
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = 1.5;
+  ctx.shadowColor = col;
+  ctx.shadowBlur  = 18;
+  ctx.strokeRect(x + 0.75, y + 0.75, w - 1.5, h - 1.5);
+  ctx.restore();
+
+  // Charge symbol above electrode
+  ctx.save();
+  ctx.textAlign  = 'center';
+  ctx.shadowColor = col;
+  ctx.font       = '500 28px Lexend, sans-serif';
+  ctx.shadowBlur = 20;
+  ctx.fillStyle  = col;
+  ctx.fillText(isAnode ? '+' : '−', mid, y - 16);
+
+  // Name below electrode
+  ctx.font       = '400 11px Lexend, sans-serif';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle  = isAnode ? 'rgba(255,96,48,0.62)' : 'rgba(34,136,255,0.62)';
+  ctx.fillText(isAnode ? 'Anode' : 'Cathode', mid, y + h + 20);
+  ctx.restore();
+}
+
+// ─── Draw E-field arrows ──────────────────────────────────────────────────────
+function drawFieldArrows() {
+  const aR = anodeR(), cL = cathodeL();
+  const eT = elecTop(), eB = elecBot();
+  const nRows  = 7;
+  const segLen = 36, headSz = 6, segGap = 88;
+
+  ctx.save();
+  ctx.globalAlpha = 0.11;
+  for (let i = 0; i < nRows; i++) {
+    const y = eT + (i + 0.5) / nRows * (eB - eT);
+    let x = aR + 26;
+    while (x + segLen < cL - 8) {
+      const t   = (x - aR) / (cL - aR);
+      const col = lerpHex('#ff6030', '#2288ff', t);
+      ctx.strokeStyle = col;
+      ctx.fillStyle   = col;
+      ctx.lineWidth   = 1.4;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + segLen, y); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x + segLen, y);
+      ctx.lineTo(x + segLen - headSz, y - headSz * 0.44);
+      ctx.lineTo(x + segLen - headSz, y + headSz * 0.44);
+      ctx.closePath(); ctx.fill();
+      x += segLen + segGap;
+    }
+  }
+  ctx.restore();
+}
+
+// ─── Draw particles ───────────────────────────────────────────────────────────
+// Draw order: water first (back), then lattice, then ions, electrons on top
+const DRAW_ORDER = ['water','cu','sn_metal','oh_minus','h_plus','na_plus','cl_minus','sn_plus','electron'];
+
+function drawParticles() {
+  const byType = {};
+  for (const p of particles) (byType[p.type] || (byType[p.type] = [])).push(p);
+  for (const type of DRAW_ORDER) {
+    const grp = byType[type];
+    if (!grp) continue;
+    const img  = getImg(type);
+    const half = img.width / 2;
+    for (const p of grp) ctx.drawImage(img, p.x - half, p.y - half);
+  }
+}
+
+// ─── Main draw ────────────────────────────────────────────────────────────────
+function draw() {
+  ctx.fillStyle = '#05040f';
+  ctx.fillRect(0, 0, W, H);
+
+  // Aqueous tint between electrodes
+  if (currentMode !== 'copper' && currentMode !== 'tin') {
+    ctx.fillStyle = 'rgba(36,72,138,0.07)';
+    ctx.fillRect(anodeR(), toolH, cathodeL() - anodeR(), H - toolH);
+  }
+
+  drawFieldArrows();
+
+  const eT = elecTop(), eH = elecBot() - eT;
+  drawElectrode(anodeL(), eT, ELEC_W, eH, true);
+  drawElectrode(cathodeL(), eT, ELEC_W, eH, false);
+
+  drawParticles();
+}
+
+// ─── Animation loop ───────────────────────────────────────────────────────────
+function loop() {
+  step();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ─── Controls ─────────────────────────────────────────────────────────────────
+document.querySelectorAll('.mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    initMode(btn.dataset.mode);
+  });
+});
+
+window.addEventListener('resize', () => {
+  resize();
+  initMode(currentMode);
+});
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+resize();
+initMode('copper');
+loop();
+
+</script>
+</body>
+</html>
