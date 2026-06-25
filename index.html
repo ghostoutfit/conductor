@@ -375,42 +375,62 @@ const _imgCache = {};
 
 function getImg(type) {
   if (_imgCache[type]) return _imgCache[type];
-  const d    = PTYPES[type];
-  const r    = d.r;
-  const pad  = 2;
+  const d   = PTYPES[type];
+  const r   = d.r;
+  const pad = Math.ceil(r * 0.30);   // extra room for fuzzy edge bleed
   const size = (r + pad) * 2;
-  const oc   = document.createElement('canvas');
+  const oc  = document.createElement('canvas');
   oc.width = oc.height = size;
   const ot = oc.getContext('2d');
   const cx = size / 2, cy = size / 2;
 
-  if (type === 'water') {
-    // Simple translucent blue circle
-    const g = ot.createRadialGradient(cx - r*0.25, cy - r*0.25, 0, cx, cy, r);
-    g.addColorStop(0,   'rgba(165,215,248,0.65)');
-    g.addColorStop(0.6, 'rgba(110,175,228,0.42)');
-    g.addColorStop(1,   'rgba(80,140,205,0.10)');
-    ot.fillStyle = g;
-    ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
-  } else if (type === 'electron') {
-    // Flat solid — no gradient, no blur; drawn via arc() in drawParticles instead
-    // (cache not used for electrons)
+  if (type === 'electron') {
+    // drawn directly via arc() — cache unused
+  } else if (type === 'water') {
+    // Fuzzy translucent water blob
+    const outerR = r * 1.18;
+    const base = ot.createRadialGradient(cx, cy, 0, cx, cy, outerR);
+    base.addColorStop(0,    'rgba(140,200,240,0.55)');
+    base.addColorStop(0.78, 'rgba(110,175,228,0.40)');
+    base.addColorStop(1,    'rgba(80,140,205,0)');
+    ot.fillStyle = base;
+    ot.beginPath(); ot.arc(cx, cy, outerR, 0, Math.PI * 2); ot.fill();
+    // Soft bright centre
+    const core = ot.createRadialGradient(cx, cy, 0, cx, cy, r * 0.7);
+    core.addColorStop(0,   'rgba(200,235,255,0.45)');
+    core.addColorStop(0.5, 'rgba(200,235,255,0.30)');
+    core.addColorStop(1,   'rgba(200,235,255,0)');
+    ot.fillStyle = core;
+    ot.beginPath(); ot.arc(cx, cy, r * 0.7, 0, Math.PI * 2); ot.fill();
   } else {
     const hex = d.hex;
-    // Core sphere — highlight + body + shadow, no outer glow
-    const gCore = ot.createRadialGradient(cx - r * 0.3, cy - r * 0.32, 0, cx, cy, r);
-    gCore.addColorStop(0,    lighten(hex, 0.50));
-    gCore.addColorStop(0.42, hex);
-    gCore.addColorStop(1,    darken(hex, 0.42));
-    ot.fillStyle = gCore;
-    ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
+    const outerR = r * 1.18;
 
-    // Label for larger particles
+    // Layer 1 — flat base, solid colour that fades to transparent at edge (fuzzy border)
+    const base = ot.createRadialGradient(cx, cy, 0, cx, cy, outerR);
+    base.addColorStop(0,    hex);
+    base.addColorStop(0.78, hex);
+    base.addColorStop(1,    'rgba(0,0,0,0)');
+    ot.fillStyle = base;
+    ot.beginPath(); ot.arc(cx, cy, outerR, 0, Math.PI * 2); ot.fill();
+
+    // Layer 2 — bright centred bloom (inner glow, like nucleus sim)
+    const core = ot.createRadialGradient(cx, cy, 0, cx, cy, r);
+    const bright = lighten(hex, 0.48);
+    core.addColorStop(0,   bright);
+    core.addColorStop(0.5, bright);
+    core.addColorStop(1,   'rgba(0,0,0,0)');
+    ot.globalAlpha = 0.72;
+    ot.fillStyle = core;
+    ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
+    ot.globalAlpha = 1;
+
+    // Label
     if (r >= 8 && d.label) {
       const fs = Math.max(7, Math.min(10, r * 0.78));
       ot.font = `600 ${fs}px Lexend, sans-serif`;
       ot.textAlign = 'center'; ot.textBaseline = 'middle';
-      ot.fillStyle = 'rgba(255,255,255,0.88)';
+      ot.fillStyle = 'rgba(255,255,255,0.90)';
       ot.fillText(d.label, cx, cy);
     }
   }
