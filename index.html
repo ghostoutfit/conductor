@@ -126,6 +126,19 @@ const WATER_EFAC  = 0.028;
 const ALPHA_MIN   = 0.07;
 const ALPHA_MAX   = 1.0;
 
+// ─── Water molecule geometry + polar physics ──────────────────────────────────
+const W_O_OFF      = 2;     // O center displaced this many px behind molecule center
+const W_H_OFF      = 9;     // H centers this many px from molecule center
+const W_H_HALF     = 0.91;  // half of H-O-H angle (52.25° = 104.5°/2) in radians
+const W_HX         = W_H_OFF * Math.cos(W_H_HALF);  // H local x offset (~5.5)
+const W_HY         = W_H_OFF * Math.sin(W_H_HALF);  // H local y offset (~7.1)
+const HYDRATION_R  = 85;    // px — cutoff for polar / hydration effects
+const HYDRATION_WELL_R = 52; // px — preferred water-ion distance (hydration shell radius)
+const HYDRATION_F  = 0.0014; // positional well force strength
+const POLAR_K      = 0.14;   // angular torque strength
+const ANG_DAMP     = 0.92;   // angular velocity damping
+const ANG_THERMAL  = 0.003;  // random angular jitter per frame
+
 // ─── Particle type definitions ────────────────────────────────────────────────
 // electrons are YELLOW; orbs = valence electron count on the ion
 const PTYPES = {
@@ -188,6 +201,8 @@ function makeParticle(type, x, y, fixed) {
     fixed: !!fixed, homeX: x, homeY: y,
     alpha:  0.28 + Math.random() * 0.72,
     scale:  1.0,
+    angle:  type === 'water' ? Math.random() * Math.PI * 2 : 0,
+    angVel: 0,
     // electrons drift depth slowly (they're the only moving layer in metal modes)
     dAlpha: (Math.random() < 0.5 ? 1 : -1) * (type === 'electron'
       ? 0.0008 + Math.random() * 0.0012
@@ -290,6 +305,10 @@ function step() {
   const eS     = eStrength();
   const efac   = currentMode === 'water' ? WATER_EFAC : 1.0;
 
+  // Precompute charged non-water particles for water polar interactions
+  const chargedPs = isMetal() ? null
+    : particles.filter(q => q.charge !== 0 && q.type !== 'water');
+
   for (const p of particles) {
     // Update orbital electrons — random walk on sphere surface
     for (const orb of p.orbitals) {
@@ -313,6 +332,28 @@ function step() {
       // Re-orthogonalize velocity to sphere surface
       const dot = orb.tx*orb.nx + orb.ty*orb.ny + orb.tz*orb.nz;
       orb.tx -= dot*orb.nx; orb.ty -= dot*orb.ny; orb.tz -= dot*orb.nz;
+    }
+
+    // Water polar orientation + hydration well clustering
+    if (p.type === 'water' && chargedPs) {
+      let torque = 0;
+      for (const q of chargedPs) {
+        const dx = q.x - p.x, dy = q.y - p.y;
+        if (dx*dx + dy*dy > HYDRATION_R * HYDRATION_R) continue;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        // Polar torque: O faces cations, H faces anions
+        const tgt = q.charge > 0 ? Math.atan2(dy, dx) + Math.PI : Math.atan2(dy, dx);
+        let diff = tgt - p.angle;
+        if (diff > Math.PI)  diff -= 2 * Math.PI;
+        if (diff < -Math.PI) diff += 2 * Math.PI;
+        torque += diff * POLAR_K / Math.max(20, dist);
+        // Hydration well: gentle pull toward preferred shell distance
+        const wf = (dist - HYDRATION_WELL_R) * HYDRATION_F / dist;
+        p.vx += dx * wf; p.vy += dy * wf;
+      }
+      p.angVel += torque + (Math.random() - 0.5) * ANG_THERMAL;
+      p.angVel *= ANG_DAMP;
+      p.angle  += p.angVel;
     }
 
     if (p.fixed) {
@@ -373,8 +414,32 @@ function darken(hex, f) {
 // ─── Particle image cache (no glow) ──────────────────────────────────────────
 const _imgCache = {};
 
+function makeAtomImg(r, hex) {
+  const pad = Math.ceil(r * 0.30), size = (r + pad) * 2;
+  const oc = document.createElement('canvas');
+  oc.width = oc.height = size;
+  const ot = oc.getContext('2d');
+  const cx = size / 2, cy = size / 2, outerR = r * 1.18;
+  const base = ot.createRadialGradient(cx, cy, 0, cx, cy, outerR);
+  base.addColorStop(0, hex); base.addColorStop(0.78, hex); base.addColorStop(1, 'rgba(0,0,0,0)');
+  ot.fillStyle = base;
+  ot.beginPath(); ot.arc(cx, cy, outerR, 0, Math.PI * 2); ot.fill();
+  const core = ot.createRadialGradient(cx, cy, 0, cx, cy, r);
+  const bright = lighten(hex, 0.48);
+  core.addColorStop(0, bright); core.addColorStop(0.5, bright); core.addColorStop(1, 'rgba(0,0,0,0)');
+  ot.globalAlpha = 0.72; ot.fillStyle = core;
+  ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
+  ot.globalAlpha = 1;
+  return oc;
+}
+
 function getImg(type) {
   if (_imgCache[type]) return _imgCache[type];
+
+  // H₂O sub-atom images (not in PTYPES)
+  if (type === 'water_O') { _imgCache[type] = makeAtomImg(6, '#cc2211'); return _imgCache[type]; }
+  if (type === 'water_H') { _imgCache[type] = makeAtomImg(3, '#dde8ff'); return _imgCache[type]; }
+
   const d   = PTYPES[type];
   const r   = d.r;
   const pad = Math.ceil(r * 0.30);   // extra room for fuzzy edge bleed
@@ -384,48 +449,20 @@ function getImg(type) {
   const ot = oc.getContext('2d');
   const cx = size / 2, cy = size / 2;
 
-  if (type === 'electron') {
-    // drawn directly via arc() — cache unused
-  } else if (type === 'water') {
-    // Fuzzy translucent water blob
-    const outerR = r * 1.18;
-    const base = ot.createRadialGradient(cx, cy, 0, cx, cy, outerR);
-    base.addColorStop(0,    'rgba(140,200,240,0.55)');
-    base.addColorStop(0.78, 'rgba(110,175,228,0.40)');
-    base.addColorStop(1,    'rgba(80,140,205,0)');
-    ot.fillStyle = base;
-    ot.beginPath(); ot.arc(cx, cy, outerR, 0, Math.PI * 2); ot.fill();
-    // Soft bright centre
-    const core = ot.createRadialGradient(cx, cy, 0, cx, cy, r * 0.7);
-    core.addColorStop(0,   'rgba(200,235,255,0.45)');
-    core.addColorStop(0.5, 'rgba(200,235,255,0.30)');
-    core.addColorStop(1,   'rgba(200,235,255,0)');
-    ot.fillStyle = core;
-    ot.beginPath(); ot.arc(cx, cy, r * 0.7, 0, Math.PI * 2); ot.fill();
+  if (type === 'electron' || type === 'water') {
+    // electrons drawn via arc(); water drawn as H₂O molecules — neither uses this cache
   } else {
-    const hex = d.hex;
-    const outerR = r * 1.18;
-
-    // Layer 1 — flat base, solid colour that fades to transparent at edge (fuzzy border)
+    const hex = d.hex, outerR = r * 1.18;
     const base = ot.createRadialGradient(cx, cy, 0, cx, cy, outerR);
-    base.addColorStop(0,    hex);
-    base.addColorStop(0.78, hex);
-    base.addColorStop(1,    'rgba(0,0,0,0)');
+    base.addColorStop(0, hex); base.addColorStop(0.78, hex); base.addColorStop(1, 'rgba(0,0,0,0)');
     ot.fillStyle = base;
     ot.beginPath(); ot.arc(cx, cy, outerR, 0, Math.PI * 2); ot.fill();
-
-    // Layer 2 — bright centred bloom (inner glow, like nucleus sim)
     const core = ot.createRadialGradient(cx, cy, 0, cx, cy, r);
     const bright = lighten(hex, 0.48);
-    core.addColorStop(0,   bright);
-    core.addColorStop(0.5, bright);
-    core.addColorStop(1,   'rgba(0,0,0,0)');
-    ot.globalAlpha = 0.72;
-    ot.fillStyle = core;
+    core.addColorStop(0, bright); core.addColorStop(0.5, bright); core.addColorStop(1, 'rgba(0,0,0,0)');
+    ot.globalAlpha = 0.72; ot.fillStyle = core;
     ot.beginPath(); ot.arc(cx, cy, r, 0, Math.PI * 2); ot.fill();
     ot.globalAlpha = 1;
-
-    // Label — font size based on pre-scale radius so text stays the same size
     if (r >= 8 && d.label) {
       const fs = Math.max(7, Math.min(10, (r / 1.2) * 0.78));
       ot.font = `600 ${fs}px Lexend, sans-serif`;
@@ -450,11 +487,30 @@ function drawParticles() {
   const byType = {};
   for (const p of particles) (byType[p.type] || (byType[p.type] = [])).push(p);
 
-  // Draw non-electron particle types via offscreen image cache
+  // Draw non-electron particle types
+  // Water gets special H₂O molecule rendering; all others use offscreen image cache
+  const oImg = getImg('water_O'), oH = oImg.width / 2;
+  const hImg = getImg('water_H'), hH = hImg.width / 2;
+
   for (const type of DRAW_ORDER) {
     if (type === 'electron') continue;
     const grp = byType[type];
     if (!grp) continue;
+
+    if (type === 'water') {
+      for (const p of grp) {
+        ctx.globalAlpha = p.alpha;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.angle);
+        ctx.drawImage(oImg, -W_O_OFF - oH, -oH);           // O: behind centre
+        ctx.drawImage(hImg,  W_HX - hH,    W_HY - hH);    // H₁
+        ctx.drawImage(hImg,  W_HX - hH,   -W_HY - hH);    // H₂
+        ctx.restore();
+      }
+      continue;
+    }
+
     const img      = getImg(type);
     const baseHalf = img.width / 2;
     for (const p of grp) {
