@@ -305,10 +305,6 @@ function step() {
   const eS     = eStrength();
   const efac   = currentMode === 'water' ? WATER_EFAC : 1.0;
 
-  // Precompute charged non-water particles for water polar interactions
-  const chargedPs = isMetal() ? null
-    : particles.filter(q => q.charge !== 0 && q.type !== 'water');
-
   for (const p of particles) {
     // Update orbital electrons — random walk on sphere surface
     for (const orb of p.orbitals) {
@@ -334,24 +330,9 @@ function step() {
       orb.tx -= dot*orb.nx; orb.ty -= dot*orb.ny; orb.tz -= dot*orb.nz;
     }
 
-    // Water polar orientation + hydration well clustering
-    if (p.type === 'water' && chargedPs) {
-      let torque = 0;
-      for (const q of chargedPs) {
-        const dx = q.x - p.x, dy = q.y - p.y;
-        if (dx*dx + dy*dy > HYDRATION_R * HYDRATION_R) continue;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        // Polar torque: O faces cations, H faces anions
-        const tgt = q.charge > 0 ? Math.atan2(dy, dx) + Math.PI : Math.atan2(dy, dx);
-        let diff = tgt - p.angle;
-        if (diff > Math.PI)  diff -= 2 * Math.PI;
-        if (diff < -Math.PI) diff += 2 * Math.PI;
-        torque += diff * POLAR_K / Math.max(20, dist);
-        // Hydration well: gentle pull toward preferred shell distance
-        const wf = (dist - HYDRATION_WELL_R) * HYDRATION_F / dist;
-        p.vx += dx * wf; p.vy += dy * wf;
-      }
-      p.angVel += torque + (Math.random() - 0.5) * ANG_THERMAL;
+    // Water molecules tumble freely
+    if (p.type === 'water') {
+      p.angVel += (Math.random() - 0.5) * ANG_THERMAL;
       p.angVel *= ANG_DAMP;
       p.angle  += p.angVel;
     }
